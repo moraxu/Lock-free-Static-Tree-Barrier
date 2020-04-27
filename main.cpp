@@ -1,7 +1,6 @@
 #include <iostream>
 #include <thread>
 #include <atomic>
-#include <vector>
 
 class ThreadID {
 private:
@@ -25,7 +24,8 @@ class StaticTreeBarrier {
 
     int radix;
     static std::atomic<int> sense;
-    std::vector<Node*> nodes;
+    Node** nodes;
+    int nodesSize = 0;
     static thread_local bool threadSense;
 
     class Node {
@@ -35,49 +35,42 @@ class StaticTreeBarrier {
 
     public:
         Node(Node* myParent, int count) : children{count}, childCount{count}, parent{myParent} {
-            std::cout <<"NEW NODE: parent="<<myParent<<" my child count=" << childCount.load()<<"\n";
-
+            //std::cout <<"NEW NODE: parent="<<myParent<<" my child count=" << childCount.load()<<"\n";
         }
 
         void await() {
-            std::cout <<"Pre0";
-            while(childCount.load(std::memory_order_seq_cst) > 0);  //acquire
-            std::cout <<"Pre";
-            childCount.store(children, std::memory_order_seq_cst);  //relaxed
-            std::cout <<"Success0";
+            while(childCount.load(std::memory_order_acquire) > 0);  //acquire
+            childCount.store(children, std::memory_order_relaxed);  //relaxed
             if(parent != nullptr) {
-                std::cout <<"Success1";
                 parent->childDone();
-                std::cout <<"Success2";
-                while(sense.load(std::memory_order_seq_cst) != threadSense); //acquire
+                while(sense.load(std::memory_order_acquire) != threadSense); //acquire
             }
             else {
-                std::cout <<"Success3";
-                sense.fetch_xor(1, std::memory_order_seq_cst);  //release or acq_rel
+                sense.fetch_xor(1, std::memory_order_acq_rel);  //release or acq_rel
             }
             threadSense = !threadSense;
         }
 
         void childDone() {
-            childCount.fetch_sub(1, std::memory_order_seq_cst); //release
+            childCount.fetch_sub(1, std::memory_order_release); //release
         }
     };
 
     void build(Node* parent, int depth) {
         if(depth == 0) {
-            nodes.push_back(new Node(parent, 0));
+            nodes[nodesSize++] = new Node(parent, 0);
         }
         else {
-            nodes.push_back(new Node(parent, radix));
-            Node* last = nodes.back();
+            Node* myNode = new Node(parent, radix);
+            nodes[nodesSize++] = myNode;
             for(int i = 0 ; i < radix ; ++i) {
-                build(last, depth - 1);
+                build(myNode, depth - 1);
             }
         }
     }
 
 public:
-    StaticTreeBarrier(int size, int myRadix) : radix{myRadix}, nodes(size) {
+    StaticTreeBarrier(int size, int myRadix) : radix{myRadix}, nodes{new Node*[size]} {
         //TODO: Let's assume that there are exactly n = r^(d+1)-1 threads
         int depth = 0;
         while(size > 1) {
@@ -93,9 +86,10 @@ public:
     }
 
     ~StaticTreeBarrier() {
-        for(Node* node : nodes) {
-            delete node;
+        for(int i = 0 ; i < nodesSize ; ++i) {
+            delete nodes[i];
         }
+        delete [] nodes;
     }
 };
 
@@ -104,24 +98,24 @@ thread_local bool StaticTreeBarrier::threadSense = true;
 
 void first(StaticTreeBarrier* barrier)
 {
-    for(int i = 0 ; i < 1 ; ++i) {
-        //std::cout << "First thread: " << i << "\n";
+    for(int i = 0 ; i < 3 ; ++i) {
+        std::cout << "First thread: " << i << "\n";
         barrier->await();
     }
 }
 
 void second(StaticTreeBarrier* barrier)
 {
-    for(int i = 0 ; i < 1 ; ++i) {
-        //std::cout << "Second thread: " << i << "\n";
+    for(int i = 0 ; i < 3 ; ++i) {
+        std::cout << "Second thread: " << i << "\n";
         barrier->await();
     }
 }
 
 void third(StaticTreeBarrier* barrier)
 {
-    for(int i = 0 ; i < 1 ; ++i) {
-        //std::cout << "Third thread: " << i << "\n";
+    for(int i = 0 ; i < 3 ; ++i) {
+        std::cout << "Third thread: " << i << "\n";
         barrier->await();
     }
 }
